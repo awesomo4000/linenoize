@@ -58,14 +58,12 @@ pub const History = struct {
         const file = try std.fs.cwd().openFile(path, .{});
         defer file.close();
 
-        const reader = file.reader();
-        while (reader.readUntilDelimiterAlloc(self.allocator, '\n', max_line_len)) |line| {
-            try self.hist.append(self.allocator, line);
-        } else |err| {
-            switch (err) {
-                error.EndOfStream => return,
-                else => return err,
-            }
+        const content = try file.readToEndAlloc(self.allocator, 1024 * 1024); // 1MB max
+        defer self.allocator.free(content);
+        
+        var iter = std.mem.tokenizeScalar(u8, content, '\n');
+        while (iter.next()) |line| {
+            try self.hist.append(self.allocator, try self.allocator.dupe(u8, line));
         }
 
         self.truncate();

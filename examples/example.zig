@@ -8,10 +8,10 @@ const Linenoise = @import("linenoise").Linenoise;
 
 fn completion(allocator: Allocator, buf: []const u8) ![]const []const u8 {
     if (std.mem.eql(u8, "z", buf)) {
-        var result = ArrayList([]const u8).init(allocator);
-        try result.append(try allocator.dupe(u8, "zig"));
-        try result.append(try allocator.dupe(u8, "ziglang"));
-        return result.toOwnedSlice();
+        var result = ArrayList([]const u8){};
+        try result.append(allocator, try allocator.dupe(u8, "zig"));
+        try result.append(allocator, try allocator.dupe(u8, "ziglang"));
+        return result.toOwnedSlice(allocator);
     } else {
         return &[_][]const u8{};
     }
@@ -25,11 +25,11 @@ fn hints(allocator: Allocator, buf: []const u8) !?[]const u8 {
     }
 }
 
-var debug_allocator: std.heap.DebugAllocator(.{}) = .init;
+var gpa = std.heap.GeneralPurposeAllocator(.{}){};
 
 pub fn main() !void {
-    defer _ = debug_allocator.deinit();
-    const allocator = debug_allocator.allocator();
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
 
     var ln = Linenoise.init(allocator);
     defer ln.deinit();

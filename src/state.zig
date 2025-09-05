@@ -3,7 +3,6 @@ const Allocator = std.mem.Allocator;
 const ArrayList = std.ArrayList;
 const ArrayListUnmanaged = std.ArrayListUnmanaged;
 const File = std.fs.File;
-const bufferedWriter = std.io.bufferedWriter;
 const math = std.math;
 
 const Linenoise = @import("main.zig").Linenoise;
@@ -177,8 +176,10 @@ pub const LinenoiseState = struct {
 
                     // Restore original buffer into state
                     self.buf.deinit(self.allocator);
-                    var new_buf = ArrayList(u8).fromOwnedSlice(self.allocator, old_buf);
-                    self.buf = new_buf.moveToUnmanaged();
+                    self.buf = ArrayListUnmanaged(u8){
+                        .items = old_buf,
+                        .capacity = old_buf.len,
+                    };
                     self.pos = old_pos;
                 } else {
                     // Return to original line
@@ -231,8 +232,9 @@ pub const LinenoiseState = struct {
     }
 
     fn refreshSingleLine(self: *Self) !void {
-        var buf = bufferedWriter(self.stdout.writer());
-        var writer = buf.writer();
+        var buf = std.ArrayList(u8){};
+        defer buf.deinit(self.allocator);
+        var writer = buf.writer(self.allocator);
 
         const hint = try self.getHint();
         defer if (hint) |str| self.allocator.free(str);
@@ -308,12 +310,13 @@ pub const LinenoiseState = struct {
         try writer.print("\r\x1b[{}C", .{cursor_pos});
 
         // Write buffer
-        try buf.flush();
+        try self.stdout.writeAll(buf.items);
     }
 
     fn refreshMultiLine(self: *Self) !void {
-        var buf = bufferedWriter(self.stdout.writer());
-        var writer = buf.writer();
+        var buf = std.ArrayList(u8){};
+        defer buf.deinit(self.allocator);
+        var writer = buf.writer(self.allocator);
 
         const hint = try self.getHint();
         defer if (hint) |str| self.allocator.free(str);
@@ -393,7 +396,7 @@ pub const LinenoiseState = struct {
 
         self.old_pos = pos;
 
-        try buf.flush();
+        try self.stdout.writeAll(buf.items);
     }
 
     pub fn refreshLine(self: *Self) !void {

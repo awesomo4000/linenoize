@@ -184,12 +184,18 @@ fn linenoiseRaw(ln: *Linenoise, in: File, out: File, prompt: []const u8) !?[]con
 
 /// Read a line with no special features (no hints, no completions, no history)
 fn linenoiseNoTTY(allocator: Allocator, stdin: File) !?[]const u8 {
-    var reader = stdin.reader();
-    const max_line_len = std.math.maxInt(usize);
-    return reader.readUntilDelimiterAlloc(allocator, '\n', max_line_len) catch |e| switch (e) {
-        error.EndOfStream => return null,
-        else => return e,
-    };
+    const max_line_len = 4096;
+    var buf = try allocator.alloc(u8, max_line_len);
+    defer allocator.free(buf);
+    
+    const bytes_read = stdin.read(buf) catch return null;
+    if (bytes_read == 0) return null;
+    
+    // Find first newline and return just that line
+    if (std.mem.indexOfScalar(u8, buf[0..bytes_read], '\n')) |idx| {
+        return try allocator.dupe(u8, buf[0..idx]);
+    }
+    return try allocator.dupe(u8, buf[0..bytes_read]);
 }
 
 pub const Linenoise = struct {
@@ -210,7 +216,9 @@ pub const Linenoise = struct {
 
     /// Initialize a linenoise struct
     pub fn init(allocator: Allocator) Self {
-        return initWithFiles(allocator, std.io.getStdIn(), std.io.getStdOut());
+        const stdin = std.fs.File{ .handle = 0 };
+        const stdout = std.fs.File{ .handle = 1 };
+        return initWithFiles(allocator, stdin, stdout);
     }
 
     /// Initialize a linenoise struct with specific input and output streams
