@@ -216,22 +216,15 @@ pub const Linenoise = struct {
 
     /// Initialize a linenoise struct
     pub fn init(allocator: Allocator) Self {
-        const stdin = blk: {
-            if (@import("builtin").os.tag == .windows) {
-                const handle = std.os.windows.GetStdHandle(std.os.windows.STD_INPUT_HANDLE) catch unreachable;
-                break :blk std.fs.File{ .handle = handle };
-            } else {
-                break :blk std.fs.File{ .handle = 0 };
-            }
-        };
-        const stdout = blk: {
-            if (@import("builtin").os.tag == .windows) {
-                const handle = std.os.windows.GetStdHandle(std.os.windows.STD_OUTPUT_HANDLE) catch unreachable;
-                break :blk std.fs.File{ .handle = handle };
-            } else {
-                break :blk std.fs.File{ .handle = 1 };
-            }
-        };
+        const builtin = @import("builtin");
+        const stdin = if (builtin.os.tag == .windows) 
+            @import("windows_term.zig").getStdIn() 
+        else 
+            std.fs.File{ .handle = 0 };
+        const stdout = if (builtin.os.tag == .windows) 
+            @import("windows_term.zig").getStdOut() 
+        else 
+            std.fs.File{ .handle = 1 };
         return initWithFiles(allocator, stdin, stdout);
     }
 
@@ -277,4 +270,6 @@ pub const Linenoise = struct {
 
 test "all" {
     _ = @import("history.zig");
+    _ = @import("unicode.zig");
+    _ = @import("term.zig");
 }

@@ -2,13 +2,27 @@ const std = @import("std");
 const builtin = @import("builtin");
 const File = std.fs.File;
 
-const unsupported_term = [_][]const u8{ "dumb", "cons25", "emacs" };
+const unsupported_term =
+    [_][]const u8{ "dumb", "cons25", "emacs" };
 
 const is_windows = builtin.os.tag == .windows;
-const termios = if (!is_windows) std.posix.termios else struct { inMode: w.DWORD, outMode: w.DWORD };
+
+// Import Windows-specific module when on Windows
+const windows_term = if (is_windows) @import(
+    "windows_term.zig",
+) else struct {};
+
+// Platform-specific termios type
+pub const termios = if (!is_windows)
+blk: {
+    break :blk std.posix.termios;
+} else windows_term.WindowsTermios;
 
 pub fn isUnsupportedTerm(allocator: std.mem.Allocator) bool {
-    const env_var = std.process.getEnvVarOwned(allocator, "TERM") catch return false;
+    const env_var = std.process.getEnvVarOwned(
+        allocator,
+        "TERM",
+    ) catch return false;
     defer allocator.free(env_var);
     return for (unsupported_term) |t| {
         if (std.ascii.eqlIgnoreCase(env_var, t))
@@ -16,42 +30,9 @@ pub fn isUnsupportedTerm(allocator: std.mem.Allocator) bool {
     } else false;
 }
 
-const w = if (is_windows) std.os.windows else struct {};
-const ENABLE_VIRTUAL_TERMINAL_INPUT = @as(c_int, 0x200);
-const CP_UTF8 = @as(c_int, 65001);
-const INPUT_RECORD = if (is_windows) extern struct {
-    EventType: w.WORD,
-    _ignored: [16]u8,
-} else struct {};
-
-const k32 = if (is_windows) struct {
-    const kernel32 = std.os.windows.kernel32;
-    pub const GetConsoleMode = kernel32.GetConsoleMode;
-    pub const SetConsoleMode = kernel32.SetConsoleMode;
-    pub const SetConsoleOutputCP = kernel32.SetConsoleOutputCP;
-    pub const GetConsoleScreenBufferInfo = kernel32.GetConsoleScreenBufferInfo;
-    pub extern "kernel32" fn SetConsoleCP(wCodePageID: w.UINT) callconv(.winapi) w.BOOL;
-    pub extern "kernel32" fn PeekConsoleInputW(hConsoleInput: w.HANDLE, lpBuffer: [*]INPUT_RECORD, nLength: w.DWORD, lpNumberOfEventsRead: ?*w.DWORD) callconv(.winapi) w.BOOL;
-    pub extern "kernel32" fn ReadConsoleW(hConsoleInput: w.HANDLE, lpBuffer: [*]u16, nNumberOfCharsToRead: w.DWORD, lpNumberOfCharsRead: ?*w.DWORD, lpReserved: ?*anyopaque) callconv(.winapi) w.BOOL;
-} else struct {};
-
 pub fn enableRawMode(in: File, out: File) !termios {
     if (is_windows) {
-        var result: termios = .{
-            .inMode = 0,
-            .outMode = 0,
-        };
-        var irec: [1]INPUT_RECORD = undefined;
-        var n: w.DWORD = 0;
-        if (k32.PeekConsoleInputW(in.handle, &irec, 1, &n) == 0 or
-            k32.GetConsoleMode(in.handle, &result.inMode) == 0 or
-            k32.GetConsoleMode(out.handle, &result.outMode) == 0)
-            return error.InitFailed;
-        _ = k32.SetConsoleMode(in.handle, ENABLE_VIRTUAL_TERMINAL_INPUT);
-        _ = k32.SetConsoleMode(out.handle, result.outMode | w.ENABLE_VIRTUAL_TERMINAL_PROCESSING);
-        _ = k32.SetConsoleCP(65001); // CP_UTF8
-        _ = k32.SetConsoleOutputCP(65001); // CP_UTF8
-        return result;
+        return windows_term.enableRawMode(in, out);
     } else {
         const orig = try std.posix.tcgetattr(in.handle);
         var raw = orig;
@@ -75,7 +56,11 @@ pub fn enableRawMode(in: File, out: File) !termios {
         // raw.cc[std.os.VMIN] = 1;
         // raw.cc[std.os.VTIME] = 0;
 
-        try std.posix.tcsetattr(in.handle, std.posix.TCSA.FLUSH, raw);
+        try std.posix.tcsetattr(
+            in.handle,
+            std.posix.TCSA.FLUSH,
+            raw,
+        );
 
         return orig;
     }
@@ -83,10 +68,13 @@ pub fn enableRawMode(in: File, out: File) !termios {
 
 pub fn disableRawMode(in: File, out: File, orig: termios) void {
     if (is_windows) {
-        _ = k32.SetConsoleMode(in.handle, orig.inMode);
-        _ = k32.SetConsoleMode(out.handle, orig.outMode);
+        windows_term.disableRawMode(in, out, orig);
     } else {
-        std.posix.tcsetattr(in.handle, std.posix.TCSA.FLUSH, orig) catch {};
+        std.posix.tcsetattr(
+            in.handle,
+            std.posix.TCSA.FLUSH,
+            orig,
+        ) catch {};
     }
 }
 
@@ -96,7 +84,7 @@ fn getCursorPosition(in: File, out: File) !usize {
     // Tell terminal to report cursor to in
     try out.writeAll("\x1B[6n");
 
-    // Read answer  
+    // Read answer
     var bytes_read: usize = 0;
     while (bytes_read < buf.len) {
         var one_byte: [1]u8 = undefined;
@@ -107,13 +95,17 @@ fn getCursorPosition(in: File, out: File) !usize {
     }
     if (bytes_read == 0 or buf[bytes_read - 1] != 'R')
         return error.CursorPos;
-    const answer = buf[0..bytes_read - 1];
+    const answer = buf[0 .. bytes_read - 1];
 
     // Parse answer
     if (!std.mem.startsWith(u8, "\x1B[", answer))
         return error.CursorPos;
 
-    var iter = std.mem.splitScalar(u8, answer[2..], ';');
+    var iter = std.mem.splitScalar(
+        u8,
+        answer[2..],
+        ';',
+    );
     _ = iter.next() orelse return error.CursorPos;
     const x = iter.next() orelse return error.CursorPos;
 
@@ -127,95 +119,76 @@ fn getColumnsFallback(in: File, out: File) !usize {
     const cols = try getCursorPosition(in, out);
 
     var buf: [32]u8 = undefined;
-    const bytes = try std.fmt.bufPrint(&buf, "\x1B[{}D", .{orig_cursor_pos});
+    const bytes = try std.fmt.bufPrint(
+        &buf,
+        "\x1B[{}D",
+        .{orig_cursor_pos},
+    );
     try out.writeAll(bytes);
 
     return cols;
 }
 
 pub fn getColumns(in: File, out: File) !usize {
-    switch (builtin.os.tag) {
-        .windows => {
-            var csbi: w.CONSOLE_SCREEN_BUFFER_INFO = undefined;
-            _ = k32.GetConsoleScreenBufferInfo(out.handle, &csbi);
-            return @intCast(csbi.dwSize.X);
-        },
-        else => {
-            var winsize: std.posix.winsize = .{
-                .row = 0,
-                .col = 0,
-                .xpixel = 0,
-                .ypixel = 0,
-            };
+    if (is_windows) {
+        return windows_term.getColumns(in, out);
+    } else {
+        var winsize: std.posix.winsize = .{
+            .row = 0,
+            .col = 0,
+            .xpixel = 0,
+            .ypixel = 0,
+        };
 
-            const err = std.posix.system.ioctl(in.handle, std.posix.T.IOCGWINSZ, @intFromPtr(&winsize));
-            if (std.posix.errno(err) == .SUCCESS and winsize.col > 0) {
-                return winsize.col;
-            } else {
-                return try getColumnsFallback(in, out);
-            }
-        },
+        const err = std.posix.system.ioctl(
+            in.handle,
+            std.posix.T.IOCGWINSZ,
+            @intFromPtr(&winsize),
+        );
+        if (std.posix.errno(err) == .SUCCESS and winsize.col > 0) {
+            return winsize.col;
+        } else {
+            return try getColumnsFallback(in, out);
+        }
     }
 }
 
 pub fn clearScreen() !void {
-    const stderr = blk: {
-        if (is_windows) {
-            const handle = std.os.windows.GetStdHandle(std.os.windows.STD_ERROR_HANDLE) catch unreachable;
-            break :blk std.fs.File{ .handle = handle };
-        } else {
-            break :blk std.fs.File{ .handle = 2 };
-        }
-    };
+    const stderr =
+        if (is_windows) blk: {
+            break :blk windows_term.getStdErr();
+        } else std.fs.File{ .handle = 2 };
     try stderr.writeAll("\x1b[H\x1b[2J");
 }
 
 pub fn beep() !void {
-    const stderr = blk: {
-        if (is_windows) {
-            const handle = std.os.windows.GetStdHandle(std.os.windows.STD_ERROR_HANDLE) catch unreachable;
-            break :blk std.fs.File{ .handle = handle };
-        } else {
-            break :blk std.fs.File{ .handle = 2 };
-        }
-    };
+    const stderr =
+        if (is_windows) windows_term.getStdErr() else std.fs.File{ .handle = 2 };
     try stderr.writeAll("\x07");
 }
 
-var utf8ConsoleBuffer = [_]u8{0} ** 10;
-var utf8ConsoleReadBytes: usize = 0;
+// Platform-specific read function
+pub const read = if (is_windows) windows_term.readConsole else File.read;
 
-// this is needed due to a bug in win32 console: https://github.com/microsoft/terminal/issues/4551
-fn readWin32Console(self: File, buffer: []u8) !usize {
-    var toRead = buffer.len;
-    while (toRead > 0) {
-        if (utf8ConsoleReadBytes > 0) {
-            const existing = @min(toRead, utf8ConsoleReadBytes);
-            @memcpy(buffer[(buffer.len - toRead)..], utf8ConsoleBuffer[0..existing]);
-            utf8ConsoleReadBytes -= existing;
-            if (utf8ConsoleReadBytes > 0)
-                std.mem.copyForwards(u8, &utf8ConsoleBuffer, utf8ConsoleBuffer[existing..]);
-            toRead -= existing;
-            continue;
-        }
-        var charsRead: w.DWORD = 0;
-        var wideBuf: [2]w.WCHAR = undefined;
-        if (k32.ReadConsoleW(self.handle, &wideBuf, 1, &charsRead, null) == 0)
-            return 0;
-        if (charsRead == 0)
-            break;
-        const wideBufLen: u8 = if (wideBuf[0] >= 0xD800 and wideBuf[0] <= 0xDBFF) _: {
-            // read surrogate
-            if (k32.ReadConsoleW(self.handle, wideBuf[1..], 1, &charsRead, null) == 0)
-                return 0;
-            if (charsRead == 0)
-                break;
-            break :_ 2;
-        } else 1;
-        //WideCharToMultiByte(GetConsoleCP(), 0, buf, bufLen, converted, sizeof(converted), NULL, NULL);
-        utf8ConsoleReadBytes += try std.unicode.utf16LeToUtf8(&utf8ConsoleBuffer, wideBuf[0..wideBufLen]);
-    }
-    return buffer.len - toRead;
+test "isUnsupportedTerm - unsupported terminals" {
+    const allocator = std.testing.allocator;
+    
+    // Test with known unsupported terminals
+    // Note: We can't easily mock environment variables in tests,
+    // so we'll test the function logic by calling it directly
+    // In a real environment where TERM is not set, it should return false
+    const result = isUnsupportedTerm(allocator);
+    // This will depend on the test environment
+    _ = result;
 }
 
-pub const read = if (is_windows) readWin32Console else File.read;
+test "termios type selection" {
+    // Just verify the type exists and can be instantiated
+    if (is_windows) {
+        const t: termios = .{ .inMode = 0, .outMode = 0 };
+        try std.testing.expectEqual(@as(u32, 0), t.inMode);
+    } else {
+        // On non-Windows, termios is std.posix.termios
+        // We can't easily test this without a real terminal
+    }
+}
