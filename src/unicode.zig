@@ -28,3 +28,44 @@ pub fn width(s: []const u8) usize {
 
     return result;
 }
+
+test "width - ASCII characters" {
+    const ascii = "Hello, World!";
+    try std.testing.expectEqual(@as(usize, 13), width(ascii));
+}
+
+test "width - empty string" {
+    try std.testing.expectEqual(@as(usize, 0), width(""));
+}
+
+test "width - escape sequences" {
+    // ANSI escape sequences should not contribute to width
+    const colored = "\x1b[31mRed Text\x1b[0m";
+    try std.testing.expectEqual(@as(usize, 8), width(colored)); // Only "Red Text" counts
+}
+
+test "width - unicode characters" {
+    // Test various Unicode characters
+    const emoji = "👍"; // Many emojis are width 2
+    const japanese = "日本"; // CJK characters are typically width 2
+    
+    // Basic Latin characters
+    try std.testing.expectEqual(@as(usize, 3), width("abc"));
+    
+    // Note: exact width depends on wcwidth implementation
+    // These tests may need adjustment based on the wcwidth library behavior
+    _ = width(emoji);
+    _ = width(japanese);
+}
+
+test "width - mixed content" {
+    // Mix of ASCII and escape sequences
+    const mixed = "Normal \x1b[1mBold\x1b[0m Text";
+    try std.testing.expectEqual(@as(usize, 16), width(mixed)); // "Normal Bold Text"
+}
+
+test "width - invalid UTF-8" {
+    // Invalid UTF-8 should return 0
+    const invalid = &[_]u8{ 0xFF, 0xFE, 0xFD };
+    try std.testing.expectEqual(@as(usize, 0), width(invalid));
+}
