@@ -29,9 +29,10 @@ const k32 = if (is_windows) struct {
     pub const GetConsoleMode = kernel32.GetConsoleMode;
     pub const SetConsoleMode = kernel32.SetConsoleMode;
     pub const SetConsoleOutputCP = kernel32.SetConsoleOutputCP;
-    pub extern "kernel32" fn SetConsoleCP(wCodePageID: w.UINT) callconv(w.WINAPI) w.BOOL;
-    pub extern "kernel32" fn PeekConsoleInputW(hConsoleInput: w.HANDLE, lpBuffer: [*]INPUT_RECORD, nLength: w.DWORD, lpNumberOfEventsRead: ?*w.DWORD) callconv(w.WINAPI) w.BOOL;
-    pub extern "kernel32" fn ReadConsoleW(hConsoleInput: w.HANDLE, lpBuffer: [*]u16, nNumberOfCharsToRead: w.DWORD, lpNumberOfCharsRead: ?*w.DWORD, lpReserved: ?*anyopaque) callconv(w.WINAPI) w.BOOL;
+    pub const GetConsoleScreenBufferInfo = kernel32.GetConsoleScreenBufferInfo;
+    pub extern "kernel32" fn SetConsoleCP(wCodePageID: w.UINT) callconv(.winapi) w.BOOL;
+    pub extern "kernel32" fn PeekConsoleInputW(hConsoleInput: w.HANDLE, lpBuffer: [*]INPUT_RECORD, nLength: w.DWORD, lpNumberOfEventsRead: ?*w.DWORD) callconv(.winapi) w.BOOL;
+    pub extern "kernel32" fn ReadConsoleW(hConsoleInput: w.HANDLE, lpBuffer: [*]u16, nNumberOfCharsToRead: w.DWORD, lpNumberOfCharsRead: ?*w.DWORD, lpReserved: ?*anyopaque) callconv(.winapi) w.BOOL;
 } else struct {};
 
 pub fn enableRawMode(in: File, out: File) !termios {
@@ -48,8 +49,8 @@ pub fn enableRawMode(in: File, out: File) !termios {
             return error.InitFailed;
         _ = k32.SetConsoleMode(in.handle, ENABLE_VIRTUAL_TERMINAL_INPUT);
         _ = k32.SetConsoleMode(out.handle, result.outMode | w.ENABLE_VIRTUAL_TERMINAL_PROCESSING);
-        _ = k32.SetConsoleCP(CP_UTF8);
-        _ = k32.SetConsoleOutputCP(w.CP_UTF8);
+        _ = k32.SetConsoleCP(65001); // CP_UTF8
+        _ = k32.SetConsoleOutputCP(65001); // CP_UTF8
         return result;
     } else {
         const orig = try std.posix.tcgetattr(in.handle);
@@ -158,12 +159,26 @@ pub fn getColumns(in: File, out: File) !usize {
 }
 
 pub fn clearScreen() !void {
-    const stderr = std.fs.File{ .handle = 2 };
+    const stderr = blk: {
+        if (is_windows) {
+            const handle = std.os.windows.GetStdHandle(std.os.windows.STD_ERROR_HANDLE) catch unreachable;
+            break :blk std.fs.File{ .handle = handle };
+        } else {
+            break :blk std.fs.File{ .handle = 2 };
+        }
+    };
     try stderr.writeAll("\x1b[H\x1b[2J");
 }
 
 pub fn beep() !void {
-    const stderr = std.fs.File{ .handle = 2 };
+    const stderr = blk: {
+        if (is_windows) {
+            const handle = std.os.windows.GetStdHandle(std.os.windows.STD_ERROR_HANDLE) catch unreachable;
+            break :blk std.fs.File{ .handle = handle };
+        } else {
+            break :blk std.fs.File{ .handle = 2 };
+        }
+    };
     try stderr.writeAll("\x07");
 }
 

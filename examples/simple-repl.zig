@@ -16,13 +16,12 @@ pub fn main() !void {
     // Hints appear as gray text after your cursor
     ln.hints_callback = struct {
         fn hints(alloc: std.mem.Allocator, buf: []const u8) !?[]const u8 {
-            _ = alloc;
             if (std.mem.eql(u8, "hello", buf)) {
-                return " world (hint)";
+                return try alloc.dupe(u8, " world (hint)");
             } else if (std.mem.eql(u8, "test", buf)) {
-                return " command (hint)";
+                return try alloc.dupe(u8, " command (hint)");
             } else if (std.mem.eql(u8, "help", buf)) {
-                return " - shows available commands (hint)";
+                return try alloc.dupe(u8, " - shows available commands (hint)");
             }
             return null;
         }
